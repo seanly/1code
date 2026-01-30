@@ -17,7 +17,9 @@ import {
 } from "react"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import { atomWithStorage } from "jotai/utils"
-import { agentsFocusedDiffFileAtom, filteredDiffFilesAtom, viewedFilesAtomFamily, type ViewedFileState } from "../atoms"
+import { agentsFocusedDiffFileAtom, filteredDiffFilesAtom, viewedFilesAtomFamily, fileViewerOpenAtomFamily, diffViewDisplayModeAtom, diffSidebarOpenAtomFamily, type ViewedFileState } from "../atoms"
+import { preferredEditorAtom } from "../../../lib/atoms"
+import { APP_META } from "../../../../shared/external-apps"
 import { DiffModeEnum, DiffView, DiffFile } from "@git-diff-view/react"
 import "@git-diff-view/react/styles/diff-view-pure.css"
 import { useTheme } from "next-themes"
@@ -378,6 +380,8 @@ interface FileDiffCardProps {
   onToggleViewed: (fileKey: string, diffText: string) => void
   /** Whether to show the viewed checkbox (hide for sandboxes) */
   showViewed?: boolean
+  /** Chat ID for file preview sidebar */
+  chatId?: string
 }
 
 // Custom comparator to prevent unnecessary re-renders
@@ -404,6 +408,7 @@ const fileDiffCardAreEqual = (
   // Viewed state
   if (prev.isViewed !== next.isViewed) return false
   if (prev.showViewed !== next.showViewed) return false
+  if (prev.chatId !== next.chatId) return false
   return true
 }
 
@@ -424,6 +429,7 @@ const FileDiffCard = memo(function FileDiffCard({
   isViewed,
   onToggleViewed,
   showViewed = true,
+  chatId,
 }: FileDiffCardProps) {
   const diffViewRef = useRef<{ getDiffFileInstance: () => DiffFile } | null>(
     null,
@@ -434,6 +440,26 @@ const FileDiffCard = memo(function FileDiffCard({
   // tRPC mutations for file operations
   const openInFinderMutation = trpcClient.external.openInFinder.mutate
   const openInEditorMutation = trpcClient.external.openFileInEditor.mutate
+  const openInAppMutation = trpcClient.external.openInApp.mutate
+
+  // Preferred editor
+  const preferredEditor = useAtomValue(preferredEditorAtom)
+  const editorMeta = APP_META[preferredEditor]
+
+  // File viewer (file preview sidebar)
+  const fileViewerAtom = useMemo(
+    () => fileViewerOpenAtomFamily(chatId || ""),
+    [chatId],
+  )
+  const setFileViewerPath = useSetAtom(fileViewerAtom)
+
+  // Diff sidebar state (to close dialog/fullscreen when opening file preview)
+  const diffDisplayMode = useAtomValue(diffViewDisplayModeAtom)
+  const diffSidebarAtom = useMemo(
+    () => diffSidebarOpenAtomFamily(chatId || ""),
+    [chatId],
+  )
+  const setDiffSidebarOpen = useSetAtom(diffSidebarAtom)
 
   // Expand/collapse all hunks when button is clicked
   useEffect(() => {
@@ -501,6 +527,21 @@ const FileDiffCard = memo(function FileDiffCard({
   const handleOpenInEditor = () => {
     if (absolutePath && worktreePath) {
       openInEditorMutation({ path: absolutePath, cwd: worktreePath })
+    }
+  }
+
+  const handleOpenInPreferredEditor = () => {
+    if (absolutePath) {
+      openInAppMutation({ path: absolutePath, app: preferredEditor })
+    }
+  }
+
+  const handleOpenInFilePreview = () => {
+    if (absolutePath) {
+      setFileViewerPath(absolutePath)
+      if (diffDisplayMode !== "side-peek") {
+        setDiffSidebarOpen(false)
+      }
     }
   }
 
@@ -710,9 +751,12 @@ const FileDiffCard = memo(function FileDiffCard({
               <FolderIcon className="mr-2 size-3.5" />
               Reveal in Finder
             </ContextMenuItem>
-            <ContextMenuItem onClick={handleOpenInEditor} className="text-xs">
-              <ExternalLinkIcon className="mr-2 size-3.5" />
-              Open in Editor
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={handleOpenInFilePreview} className="text-xs">
+              Open in File Preview
+            </ContextMenuItem>
+            <ContextMenuItem onClick={handleOpenInPreferredEditor} className="text-xs">
+              Open in {editorMeta.label}
             </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem
@@ -2139,6 +2183,7 @@ export const AgentDiffView = forwardRef<AgentDiffViewRef, AgentDiffViewProps>(
                         isViewed={isFileViewed(file.key, file.diffText)}
                         onToggleViewed={handleToggleViewed}
                         showViewed={!!worktreePath}
+                        chatId={chatId}
                       />
                     </div>
                   </div>
